@@ -1,0 +1,24 @@
+{
+    "name": "home-climate-control",
+    "version": "0.0.1",
+    "description": "Home Climate Control custom component for Home Assistant",
+    "keywords": [
+        "climate",
+        "homeassistant",
+        "home assistant",
+        "ha"
+    ],
+    "author": {
+        "name": "Renato Rossi",
+        "email": "",
+        "url": "https://github.com/r-renato/node-red-contrib-resi-dali-ascii-gateway.git"
+    },
+    "readmeFilename": "README.md",
+    "license": "MIT",
+    "devDependencies": {
+        "pythermalcomfort": "^2.5.4"
+    },
+    "scripts": {
+        "deploy" : "scp -r custom_components/home_climate_control drp@192.168.7.121:/tmp/home_climate_control && ssh drp@192.168.7.121 \"(cd /tmp ; sudo rm -Rf ~/homeassistant/custom_components/home_climate_control ;sudo mv home_climate_control ~/homeassistant/custom_components ; sudo chown -R root:root ~/homeassistant/custom_components/home_climate_control ; docker stop 0393d223e4ac ; sleep 7 ; docker start 0393d223e4ac)\""
+    }
+}

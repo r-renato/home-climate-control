@@ -1,0 +1,4 @@
+-r requirements.txt
+homeassistant==2022.5.5
+psychroLib==2.5.0
+pythermalcomfort==2.5.4

@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "*.yaml": "home-assistant"
+    },
+// Custom variables
+//
+    "ha_custom_component_host_path" : "/home/drp/homeassistant/custom_components",
+    "ha_custom_component_folder": "drp_climate_master",
+    "ha_user_host": "drp@192.168.7.121",
+    "ha_docker_instance_id" : "761e60cb7e98",
+}
