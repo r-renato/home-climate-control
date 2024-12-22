@@ -17,14 +17,21 @@ class DewPointPerception(StrEnum):
     """Thermal Perception."""
 
     DRY = "dry"                                             # mdi-emoticon-cool-outline
+    DRY_TEXT = "Dry"
     VERY_COMFORTABLE = "very_comfortable"                   # mdi-emoticon-happy-outline
+    VERY_COMFORTABLE_TEXT = "Very comfortable"
     COMFORTABLE = "comfortable"                             # mdi-emoticon-outline
+    COMFORTABLE_TEXT = "Comfortable"
     OK_BUT_HUMID = "ok_but_humid"                           # mdi-emoticon-neutral-outline
+    OK_BUT_HUMID_TEXT = "Ok but humid"
     SOMEWHAT_UNCOMFORTABLE = "somewhat_uncomfortable"       # mdi-emoticon-sad-outline
+    SOMEWHAT_UNCOMFORTABLE_TEXT = "Somewhat uncomfortable"
     QUITE_UNCOMFORTABLE = "quite_uncomfortable"             # mdi-emoticon-angry-outline
+    QUITE_UNCOMFORTABLE_TEXT = "Quite Uncomfortable"
     EXTREMELY_UNCOMFORTABLE = "extremely_uncomfortable"     # mdi-emoticon-cry-outline
+    EXTREMELY_UNCOMFORTABLE_TEXT = "Extremely uncomfortable"
     SEVERELY_HIGH = "severely_high"                         # mdi-emoticon-dead-outline
-
+    SEVERELY_HIGH_TEXT = "Severely high"
 
 WINTER = "winter"
 SPRING = "spring"
@@ -87,7 +94,7 @@ CONFORT_ZONES = {
     },
     WINTER: {
         "temp_min": 17.5,
-        "temp_max": 21.5,
+        "temp_max": 20.9,
         "hum_min": 40,
         "hum_max": 60,
         "delta_temp": 0.5,
@@ -106,7 +113,7 @@ CONFORT_ZONES = {
 }
 
 SEASONS_BY_DATE = {
-  WINTER: (datetime.date(2023, 12, 1), datetime.date(2024, 2, 29)),
+  WINTER: (datetime.date(2023, 12, 1), datetime.date(2024, 2, 28)),
   SPRING: (datetime.date(2024, 3,  1), datetime.date(2024, 5, 31)),
   SUMMER: (datetime.date(2024, 6, 1), datetime.date(2024, 8, 31)),
   AUTUMN: (datetime.date(2024, 9, 1), datetime.date(2023, 11, 30)),
@@ -135,6 +142,7 @@ CONF_SET_POINTS = "set_points"
 CONF_DEVICES = "devices"
 CONF_TCOLLECTOR = "thermal_collector_valve_switch"
 CONF_VMC = "vmc"
+CONF_SUPPLY_UNITS = "supply_units"
 
 ATTR_HUB = "hub"
 ATTR_SENSOR_CURRENT_TEMP = 'sensor.ambient_home_current_temperature'
@@ -163,7 +171,10 @@ CONF_T_SETPOINT = "t_setpoint"
 CONF_H_SETPOINT = "h_setpoint"
 CONF_DEW_POINT_SETPOINT = "t_dew_point_setpoint"
 CONF_DELTA_DEW_POINT_SETPOINT = "delta_t_dew_point_setpoint"
+CONF_SPARE_SETPOINT = "spare_setpoint"
 CONF_VENT_RECIRCULATION = "vent_recirculation"
+CONF_FORCE_HEATING = "force_heating"
+CONF_FORCE_COOLING = "force_cooling"
 
 CONF_SEASON = "season"
 CONF_ACTUATOR = "actuator"
@@ -171,6 +182,23 @@ CONF_WINTER = "winter"
 CONF_SUMMER = "summer"
 CONF_AUTUMN = "autumn"
 CONF_SPRING = "spring"
+
+CONF_DIRECT_SUPPLY_UNIT = "direct_supply_unit"
+CONF_ADJUSTABLE_SUPPLY_UNIT = "adjustable_supply_unit"
+CONF_THREE_POINT_MIXING_VALVE = "three_point_mixing_valve"
+
+CONF_FM_POWER = "fm_power"
+CONF_MODE = "mode"
+
+CONF_ADJUSTABLE_TEMP_SYSTEM_SUPPLY = "adjustable_temp_system_supply"
+CONF_ADJUSTABLE_TEMP_SYSTEM_RETURN = "adjustable_temp_system_return"
+CONF_DIRECT_TEMP_SYSTEM_SUPPLY = "direct_temp_system_supply"
+CONF_DIRECT_TEMP_SYSTEM_RETURN = "direct_temp_system_return"
+
+CONF_PDC_TEMP_WATER_IN = "pdc_temp_water_in"
+CONF_PDC_TEMP_WATER_OUT = "pdc_temp_water_out"
+CONF_BOILER_TEMP_SYSTEM_SUPPLY = "boiler_temp_system_supply"
+CONF_BOILER_TEMP_SYSTEM_RETURN = "boiler_temp_system_return"
 
 CONF_COMPRESSOR_MANAGEMENT = "compressor_management"
 CONF_DEHUMIDIFICATION_OR_COOLING = "dehumidification_or_cooling"

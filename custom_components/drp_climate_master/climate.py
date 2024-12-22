@@ -1,6 +1,7 @@
 """Support for Thermostats."""
 from __future__ import annotations
 
+from statistics import mean
 import time
 from random import randint
 from datetime import datetime, timedelta
@@ -9,8 +10,9 @@ import json
 import logging
 from typing import Any
 
-
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.components.climate import (
+    DATA_COMPONENT,
     ClimateEntity,
     ClimateEntityFeature,
     HVACMode,
@@ -126,6 +128,15 @@ async def async_setup_platform(
     async_add_entities(entities)
     await async_platform_add_entities( hass, Platform.SENSOR, sensors, False )
 
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up a config entry."""
+    return await hass.data[DATA_COMPONENT].async_setup_entry(entry)
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload a config entry."""
+    return await hass.data[DATA_COMPONENT].async_unload_entry(entry)
+
 class HomeClimateMaster(ClimateEntity, RestoreEntity):
     """Representation of a Thermostat."""
 
@@ -164,8 +175,8 @@ class HomeClimateMaster(ClimateEntity, RestoreEntity):
         self._unit = config[CONF_TEMPERATURE_UNIT]
 
         self._confort_zone = self.hub.get_confort_zone()
-        self._attr_min_temp = self._confort_zone['temp_min']
-        self._attr_max_temp = self._confort_zone['temp_max']
+        self._attr_min_temp = float( self._confort_zone['temp_min'] )
+        self._attr_max_temp = float( self._confort_zone['temp_max'] )
         self._attr_min_humidity = self._confort_zone['hum_min']
         self._attr_max_humidity = self._confort_zone['hum_max']
         self._attr_current_temperature = None
@@ -288,8 +299,8 @@ class HomeClimateMaster(ClimateEntity, RestoreEntity):
         self._confort_zone = self.hub.get_confort_zone()
         if self._confort_zone:
             # _LOGGER.debug( "async_update: %s", self._confort_zone )
-            self._attr_min_temp = self._confort_zone['temp_min']
-            self._attr_max_temp = self._confort_zone['temp_max']
+            self._attr_min_temp = float( self._confort_zone['temp_min'] )
+            self._attr_max_temp = float( self._confort_zone['temp_max'] )
             self._attr_min_humidity = self._confort_zone['hum_min']
             self._attr_max_humidity = self._confort_zone['hum_max']
 
@@ -362,6 +373,8 @@ class HomeClimateMaster(ClimateEntity, RestoreEntity):
     @property
     def extra_state_attributes(self):
         """Return the state attributes of the device."""
+
+        device_power_setpoint = self.hub.get_device_setpoint()
         data: dict[str, Any] = {
             "season" : self.hub.get_season_from_weather()['overridden'],
             "weather_anomaly" : self.hub.get_season_from_weather()['weather_anomaly'],
@@ -373,7 +386,11 @@ class HomeClimateMaster(ClimateEntity, RestoreEntity):
             data[ "current dew point" ] = self._attr_current_dew_point
         if self._attr_current_h_index:
             data[ "current heat index" ] = self._attr_current_h_index
-        data[ "human perception" ] = self.hub.dew_point_perception(self._attr_current_dew_point)
+        data[ "human perception" ] = self.hub.dew_point_perception_text(self._attr_current_dew_point)
+        data[ "human perception id" ] = self.hub.dew_point_perception(self._attr_current_dew_point)
+
+        data[ "temp setpoint power on" ] = device_power_setpoint['temp_setpoint_power_on']
+        data[ "temp setpoint power off" ] = device_power_setpoint['temp_setpoint_power_off']
 
         # if ClimateSensor.DEW_POINT == self._climate_sensor:
         #     data[ "human perception" ] = self.dew_point_perception()
@@ -519,6 +536,7 @@ class SlaveSensor(
                 self._attr_available = True
             elif ClimateSensor.HEAT_INDEX == self._climate_sensor:
                 self._attr_native_value = round((self.hub).calculate_heat_index(new_temp_value, new_humi_value), 1)
+                # _LOGGER.debug( "calculate_heat_index '%s %s' %s.", str(new_temp_value), str(new_humi_value), str(self._attr_native_value))
                 self._attr_available = True
         else:
             self._attr_available = False

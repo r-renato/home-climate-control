@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from statistics import mean
 from datetime import datetime, date
 import copy
 import asyncio
@@ -38,7 +39,7 @@ from homeassistant.components.climate import (
     ClimateEntityFeature,
     HVACMode,
 )
-from .helpers import weighted_average, is_leap_year
+from .helpers import weighted_average, is_leap_year, is_number, enquiry_entity_in_state_last_minutes
 
 from .const import (
     ATTR_HUB,
@@ -65,7 +66,28 @@ from .const import (
     CONF_HUMIDITY,
     CONF_DEVICES,
     CONF_VMC,
+    CONF_SUPPLY_UNITS,
     CONF_WEATHER,
+
+    CONF_DIRECT_SUPPLY_UNIT,
+    CONF_ADJUSTABLE_SUPPLY_UNIT,
+    CONF_THREE_POINT_MIXING_VALVE,
+
+    CONF_FM_POWER,
+    CONF_MODE,
+    CONF_HEATING,
+    CONF_COOLING,
+
+    CONF_ADJUSTABLE_TEMP_SYSTEM_SUPPLY,
+    CONF_ADJUSTABLE_TEMP_SYSTEM_RETURN,
+    CONF_DIRECT_TEMP_SYSTEM_SUPPLY,
+    CONF_DIRECT_TEMP_SYSTEM_RETURN,
+
+    CONF_PDC_TEMP_WATER_IN,
+    CONF_PDC_TEMP_WATER_OUT,
+    CONF_BOILER_TEMP_SYSTEM_SUPPLY,
+    CONF_BOILER_TEMP_SYSTEM_RETURN,
+
     CONF_T_AMBIENT,
     CONF_H_AMBIENT,
     CONF_T_WATER,
@@ -81,7 +103,10 @@ from .const import (
     CONF_HOME_WINDOWS_STATE,
 
     CONF_POWER,
+    CONF_SPARE_SETPOINT,
     CONF_VENT_RECIRCULATION,
+    CONF_FORCE_HEATING,
+    CONF_FORCE_COOLING,
     CONF_T_SETPOINT,
     CONF_H_SETPOINT,
     CONF_SEASON,
@@ -172,18 +197,44 @@ class DevicesHub(Entity):
     def __init__(self, hass: HomeAssistant, client_config: dict[str, Any]) -> None:
         """Initialize the Modbus hub."""
         self.hass = hass
-        self._sensor_map = dict()        
+        self._sensor_map = dict()
+
+        self._confort_setpoint_power_on = None
+        self._confort_setpoint_power_off = None
+        self._vmc_controller_water_alarm = False
+
         self.climate_config = client_config
         self._config = client_config.get(CONF_CLIMATE)[0]
         self._config_areas = self._config.get(CONF_AREAS)
         self._config_vmc = self._config.get(CONF_DEVICES).get(CONF_VMC)
+        self._config_power_supply = self._config.get(CONF_DEVICES).get(CONF_SUPPLY_UNITS)
+        self._config_radiant = self._config.get(CONF_DEVICES).get(CONF_RADIANT)
         self._config_vmc_sensors = self._config.get(CONF_DEVICES).get(CONF_VMC).get(CONF_SENSORS)
         self._config_vmc_alarms = self._config.get(CONF_DEVICES).get(CONF_VMC).get(CONF_ALARMS)
         self._config_weather = self._config.get(CONF_WEATHER)
 
+        self._power_supply_direct_id = self._config_power_supply.get(CONF_DIRECT_SUPPLY_UNIT)
+        self._power_supply_adjustable_id = self._config_power_supply.get(CONF_ADJUSTABLE_SUPPLY_UNIT)
+        self._power_supply_mixing_valve_id = self._config_power_supply.get(CONF_THREE_POINT_MIXING_VALVE)
+
+        self._radiant_fm_power_id = self._config_radiant.get(CONF_FM_POWER)
+        self._radiant_device_power_id = self._config_radiant.get(CONF_POWER)
+        self._radiant_actuator_id = self._config_radiant.get(CONF_MODE).get(CONF_ACTUATOR)
+        self._radiant_device_heating_code = self._config_radiant.get(CONF_MODE).get(CONF_HEATING)
+        self._radiant_device_cooling_code = self._config_radiant.get(CONF_MODE).get(CONF_COOLING)
+        self._radiant_device_temp_water_in = self._config_radiant.get(CONF_SENSORS).get(CONF_PDC_TEMP_WATER_IN)
+        self._radiant_device_temp_water_out = self._config_radiant.get(CONF_SENSORS).get(CONF_PDC_TEMP_WATER_OUT)
+        self._radiant_boiler_temp_system_supply = self._config_radiant.get(CONF_SENSORS).get(CONF_BOILER_TEMP_SYSTEM_SUPPLY)
+        self._radiant_boiler_temp_system_return = self._config_radiant.get(CONF_SENSORS).get(CONF_BOILER_TEMP_SYSTEM_RETURN)
+
         self._vmc_power_entity_id = self._config_vmc.get(CONF_POWER)
         self._vmc_season_config = self._config_vmc.get(CONF_SEASON)
+        self._vmc_spare_setpoint_id = self._config_vmc.get(CONF_SPARE_SETPOINT)
         self._vmc_vent_recirculation_id = self._config_vmc.get(CONF_VENT_RECIRCULATION)
+        self._vmc_force_heating_id = self._config_vmc.get(CONF_FORCE_HEATING)
+        self._vmc_force_cooling_id = self._config_vmc.get(CONF_FORCE_COOLING)
+
+
         self._vmc_t_setpoint_entity_id = self._config_vmc.get(CONF_T_SETPOINT)
         self._vmc_h_setpoint_entity_id = self._config_vmc.get(CONF_H_SETPOINT) 
 
@@ -201,8 +252,24 @@ class DevicesHub(Entity):
         self._vmc_alarm = self._config_vmc_alarms.get(CONF_ALARM)
         self._vmc_home_windows_state = self._config_vmc_alarms.get(CONF_HOME_WINDOWS_STATE)
         
+        self.hass.async_create_task( self._async_setup_entity_change( self._power_supply_direct_id ) )
+        self.hass.async_create_task( self._async_setup_entity_change( self._power_supply_adjustable_id ) )
+        self.hass.async_create_task( self._async_setup_entity_change( self._power_supply_mixing_valve_id ) )
+
+        self.hass.async_create_task( self._async_setup_entity_change( self._radiant_fm_power_id ) )
+        self.hass.async_create_task( self._async_setup_entity_change( self._radiant_device_power_id ) )
+        self.hass.async_create_task( self._async_setup_entity_change( self._radiant_actuator_id ) )
+
+        self.hass.async_create_task( self._async_setup_entity_change( self._radiant_device_temp_water_in ) )
+        self.hass.async_create_task( self._async_setup_entity_change( self._radiant_device_temp_water_out ) )
+        self.hass.async_create_task( self._async_setup_entity_change( self._radiant_boiler_temp_system_supply ) )
+        self.hass.async_create_task( self._async_setup_entity_change( self._radiant_boiler_temp_system_return ) )
+
         self.hass.async_create_task( self._async_setup_entity_change( self._vmc_power_entity_id ) )
+        self.hass.async_create_task( self._async_setup_entity_change( self._vmc_spare_setpoint_id ) )
         self.hass.async_create_task( self._async_setup_entity_change( self._vmc_vent_recirculation_id ) )
+        self.hass.async_create_task( self._async_setup_entity_change( self._vmc_force_heating_id ) )
+        self.hass.async_create_task( self._async_setup_entity_change( self._vmc_force_cooling_id ) )
         self.hass.async_create_task( self._async_setup_entity_change( self._vmc_t_setpoint_entity_id ) )
         self.hass.async_create_task( self._async_setup_entity_change( self._vmc_h_setpoint_entity_id ) )
         self.hass.async_create_task( self._async_setup_entity_change( self._vmc_season_config.get(CONF_ACTUATOR) ) )
@@ -221,14 +288,24 @@ class DevicesHub(Entity):
         self.hass.async_create_task( self._async_setup_entity_change( self._vmc_alarm ) )
         self.hass.async_create_task( self._async_setup_entity_change( self._vmc_home_windows_state ) )
 
+        for area in self._config_areas:
+            t_entity_id = area['sensors']['temperature']
+            h_entity_id = area['sensors']['humidity']
+
+            self.hass.async_create_task( self._async_setup_entity_change( t_entity_id ) )
+            self.hass.async_create_task( self._async_setup_entity_change( h_entity_id ) )   
+
         _LOGGER.debug( "Config: %s", str(self._config))
         # _LOGGER.debug( "Config: %s", str(self._config_weather))
 
     async def _async_setup_entity_change(self, entity_id):
-        self.async_on_remove(
-            async_track_state_change_event(
-                self.hass, entity_id, self._async_entity_changed))
-        _LOGGER.info( "_async_setup_entity_change '%s'.", entity_id )
+        if entity_id:
+            self.async_on_remove(
+                async_track_state_change_event(
+                    self.hass, entity_id, self._async_entity_changed))
+            _LOGGER.info( "_async_setup_entity_change '%s'.", entity_id )
+        else:
+            _LOGGER.error( "_async_setup_entity_change '%s'.", entity_id )
 
     async def _async_entity_changed(self, event):
         """Handle sensor changes."""
@@ -274,6 +351,12 @@ class DevicesHub(Entity):
         """Set up ..."""
         return True
 
+    def get_device_setpoint(self) -> any:
+        return {
+            'temp_setpoint_power_on' : self._confort_setpoint_power_on,
+            'temp_setpoint_power_off' : self._confort_setpoint_power_off,
+        }
+        
     def get_weather_temps(self):       
         result = []
         
@@ -332,6 +415,30 @@ class DevicesHub(Entity):
 
         return perception
     
+    def dew_point_perception_text(self, dewpoint) -> (DewPointPerception) | None:
+        """Dew Point <https://en.wikipedia.org/wiki/Dew_point>."""
+
+        if dewpoint is None:
+            return None
+        elif dewpoint < 10:
+            perception = DewPointPerception.DRY_TEXT
+        elif dewpoint < 13:
+            perception = DewPointPerception.VERY_COMFORTABLE_TEXT
+        elif dewpoint < 16:
+            perception = DewPointPerception.COMFORTABLE_TEXT
+        elif dewpoint < 18:
+            perception = DewPointPerception.OK_BUT_HUMID_TEXT
+        elif dewpoint < 21:
+            perception = DewPointPerception.SOMEWHAT_UNCOMFORTABLE_TEXT
+        elif dewpoint < 24:
+            perception = DewPointPerception.QUITE_UNCOMFORTABLE_TEXT
+        elif dewpoint < 26:
+            perception = DewPointPerception.EXTREMELY_UNCOMFORTABLE_TEXT
+        else:
+            perception = DewPointPerception.SEVERELY_HIGH_TEXT
+
+        return perception
+    
     def get_season_by_date(self, data=date.today()) -> dict | None:
         """
         Restituisce la label associata all'intervallo di date che contiene la data specificata,
@@ -350,14 +457,16 @@ class DevicesHub(Entity):
             # Modifica l'anno in base all'anno corrente
             start = intervallo[0].replace(year=current_year)
             end = intervallo[1].replace(year=current_year)
-            # _LOGGER.debug("get_season_by_date %s %s", str(start), str(end))
+
             # Se l'intervallo termina prima che inizi, spostiamo l'anno di fine al successivo
-            if not is_leap_year(current_year + 1):
-                end = end.replace(day=28)
+            if is_leap_year(current_year + 1) and end.month == 2:
+                end = end.replace(day=29)
 
             if end < start:
                 end = end.replace(year=current_year + 1)
-            
+
+            # _LOGGER.debug("get_season_by_date %s %s %s %s", str(start), str(today), str(end), str((start <= today <= end)))
+
             # Controlla se la data corrente rientra nell'intervallo
             if start <= today <= end:
                 total_days = (end - start).days + 1
@@ -455,6 +564,7 @@ class DevicesHub(Entity):
         season_scores = {season: 0.0 for season in CONFORT_ZONES}
         current_season = copy.copy(self.get_season_by_date())
 
+        _LOGGER.debug("get_season_from_weather - current season %s", str(current_season))
         if temperatures is not None:
             for i, temp_data in enumerate(temperatures):
                 temp_min_day = temp_data['min']
@@ -479,6 +589,8 @@ class DevicesHub(Entity):
             sorted_seasons = sorted(season_scores.items(), key=lambda item: item[1], reverse=True)
             # Seleziona la stagione con il punteggio più alto
             selected_season = max(season_scores, key=season_scores.get)
+            
+            _LOGGER.debug("get_season_from_weather - selected season %s", str(selected_season))
             current_season['overridden'] = selected_season
             current_season['weather_anomaly'] = selected_season != current_season['label']
             _LOGGER.debug("get_season_from_weather - Current season %s / Selected season '%s' / Scores data %s", str(current_season), str(selected_season), str(sorted_seasons))
@@ -533,10 +645,39 @@ class DevicesHub(Entity):
     async def async_hvac_control(self, hvac_mode, sensor_map) -> Any:
         """hvac controller"""
 
+        season_name = ''
+        confort_zone = self.get_confort_zone()
+
+        #
+        # Season evaluation
+        #
+        season_info = self.get_season_from_weather()
+        if season_info and not season_info.get('weather_anomaly'):
+            season_name = season_info.get('label')
+            _LOGGER.debug( "_async_vmc_mode_auto - FALSE weather_anomaly, current season is %s, weather season %s", \
+                            str(season_name), str(season_info.get('label')) )
+
+        elif season_info and season_info.get('weather_anomaly'):
+            season_name = season_info.get('overridden')
+            _LOGGER.debug( "_async_vmc_mode_auto - TRUE weather_anomaly, current season is '%s', weather season '%s'", \
+                            str(season_info.get('label')), str(season_name) )
+                                
         if hvac_mode == HVACMode.AUTO:
             _LOGGER.debug( "async_hvac_control mode: %s", str(hvac_mode))
 
-            await self._async_vmc_mode_auto(hvac_mode, sensor_map)
+            if season_name == CONF_WINTER:
+                self._confort_setpoint_power_on = mean( [float( confort_zone['temp_max'] ), float( confort_zone['temp_min'] )] ) \
+                                        - (float( confort_zone['delta_temp'] ) * 2 )
+                self._confort_setpoint_power_off = float( confort_zone['temp_max'] ) + (float( confort_zone['delta_temp'] ) * 2 )
+
+            await self._async_vmc_mode_auto(hvac_mode, season_name, confort_zone, sensor_map)
+            # await self._async_radiant_mode_auto(hvac_mode, season_name, confort_zone, sensor_map)
+
+            await self._async_radiant_mode_auto(
+                sensor_map, season_name,
+                self._confort_setpoint_power_on,
+                self._confort_setpoint_power_off,
+            )
 
     # Funzione per recuperare un'area specifica dal nome
     def _get_area_by_name(self, area_name):
@@ -545,67 +686,298 @@ class DevicesHub(Entity):
                 return area
         return None
 
-    async def _async_vmc_mode_auto(self, hvac_mode, sensor_map) -> Any:
+    async def _async_radiant_mode_auto(
+            self, sensor_map, season_name, 
+            confort_setpoint_power_on,
+            confort_setpoint_power_off,
+    ) -> Any:
+        """hvac Radiant controller"""
+
+        # confort_zone = self.get_confort_zone()
+
+        # self._confort_setpoint_power_on = mean( [float( confort_zone['temp_max'] ), float( confort_zone['temp_min'] )] ) \
+        #                         - (float( confort_zone['delta_temp'] ) * 2 )
+        # self._confort_setpoint_power_off = float( confort_zone['temp_max'] ) + (float( confort_zone['delta_temp'] ) * 2 )
+
+        if self._sensor_map.get( self._vmc_home_windows_state ) and \
+            self._sensor_map.get( self._vmc_home_windows_state ).state == 'on':
+
+            home_current_temp_hum = await self.async_ambient_temp_hum( self._config[CONF_AREAS], sensor_map)
+            home_current_heat_index = home_current_temp_hum.get('t_avg_h_index')
+
+            # home_current_temperature = home_current_temp_hum.get('temp')
+            # home_current_humidity = home_current_temp_hum.get('hum')
+            # terrace_temperature_id = self._get_area_by_name('Terrace').get(CONF_SENSORS).get(CONF_TEMPERATURE)
+            # terrace_temperature = float(sensor_map.get(terrace_temperature_id).state)
+            is_device_power_on = self._sensor_map.get(self._radiant_fm_power_id) and \
+                                    self._sensor_map.get(self._radiant_fm_power_id).state == STATE_ON and \
+                                self._sensor_map.get(self._radiant_device_power_id) and \
+                                    self._sensor_map.get(self._radiant_device_power_id).state == STATE_ON                                   
+
+            
+            if season_name == CONF_WINTER:
+                _LOGGER.debug( "_async_radiant_mode_auto %s", str(is_device_power_on) )
+                await self._async_radiant_mode_auto_season_winter( \
+                    is_device_power_on, \
+                    confort_setpoint_power_on, \
+                    confort_setpoint_power_off,
+                    # confort_zone, \
+                    # home_current_temperature, \
+                    home_current_heat_index,
+                )
+
+    async def _async_radiant_thermal_collector_mode_auto(
+        self,
+        confort_setpoint_power_on, 
+        confort_setpoint_power_off,
+        # reference_temp,
+        # delta_temp,
+    ) -> Any:
+        area_count = 0
+        total_mq = 0
+        opened_mq = 0
+        areas = self._config[CONF_AREAS]
+
+        # _LOGGER.debug( "_async_radiant_thermal_collector_mode_auto: %s", str(self._sensor_map.keys()) )
+        for area in areas:
+            # _LOGGER.debug( "area: %s %s", str(area), str( "indoor" in area) )
+            if "indoor" in area and "radiant" in area and area['indoor'] and area['radiant']:
+                area_count += 1
+                total_mq = total_mq + area['mq']
+                t_entity_id = area['sensors']['temperature']
+                h_entity_id = area['sensors']['humidity']
+                actuator_entity_id = area['thermal_collector_valve_switch']
+                actuator_object = self.hass.states.get(actuator_entity_id)
+                actuator_last_on = enquiry_entity_in_state_last_minutes( actuator_entity_id, 'on', '120' )
+
+                # _LOGGER.info( "_async_radiant_thermal_collector_mode_auto %s %s %s %s %s", \
+                #              str(t_entity_id), str(h_entity_id), \
+                #                  str(t_entity_id in self._sensor_map), str(h_entity_id in self._sensor_map), \
+                #                     str(actuator_object))
+                if t_entity_id in self._sensor_map and h_entity_id in self._sensor_map and actuator_object:
+                    room_temp = float( self._sensor_map[t_entity_id].state )
+                    room_hums = float( self._sensor_map[h_entity_id].state )
+                    is_actuator_on = actuator_object.state == STATE_ON
+                    # _LOGGER.info( "_async_radiant_thermal_collector_mode_auto || %s %s %s", \
+                    #              str(t_entity_id), str(actuator_object.state), str(STATE_ON) )
+                    opened_mq = opened_mq + (area['mq'] if is_actuator_on else 0)
+
+                    # _LOGGER.debug( "_async_radiant_thermal_collector_mode_auto entity '%s', room %s, delta %s, setpoint %s", \
+                    #             str(actuator_entity_id), str(room_temp), str(delta_temp), str(confort_setpoint_power_off) \
+                    #             )
+                    if room_temp > confort_setpoint_power_off: # 7 > 6
+                        # TURN OFF valve
+                        if is_actuator_on:
+                             await self._async_switch_turn( actuator_entity_id, TURN_OFF )
+                             _LOGGER.info( "_async_radiant_thermal_collector_mode_auto entity %s TURN OFF room %s > setpoint %s", \
+                                          str(t_entity_id), str(room_temp), str(confort_setpoint_power_off) \
+                                        )
+                        # opened_mq = opened_mq - area['mq'] if is_actuator_on else 0
+                    elif room_temp <= confort_setpoint_power_on or actuator_last_on == 0: #4 + 1 < 6
+                        # _LOGGER.info( "_async_radiant_thermal_collector_mode_auto entity %s last on %s", \
+                        #              str(t_entity_id), str(actuator_last_on))
+                        if not is_actuator_on:
+                             await self._async_switch_turn( actuator_entity_id, TURN_ON )
+                             _LOGGER.info( "_async_radiant_thermal_collector_mode_auto entity %s TURN ON room %s <= setpoint %s", \
+                                          str(t_entity_id), str(room_temp), str(confort_setpoint_power_on) \
+                                        )
+                    # weights.append( area['mq'] )
+                else:
+                    # area_missing += 1
+                    _LOGGER.warning( "_async_radiant_thermal_collector_mode_auto no data for entity %s and %s", str(t_entity_id), str(h_entity_id) )
+                    # return None
+
+        total_mq = (total_mq + 4) if total_mq != opened_mq else total_mq
+        _LOGGER.warning( "_async_radiant_thermal_collector_mode_auto tot mq %s opened %s", str(total_mq), str(opened_mq))
+        return {
+            "adjust_valve_percent" : max(50, round( (1 - ( ( total_mq - opened_mq) / total_mq)) * 100, 0 ))
+        }
+
+    async def _async_radiant_mode_auto_season_winter(
+            self,
+            is_device_power_on,
+            confort_setpoint_power_on, 
+            confort_setpoint_power_off,
+            # confort_zone,
+            # home_current_temperature,
+            home_current_heat_index,        
+    ) -> Any:
+        """hvac Radiant controller Season Winter"""
+        if is_device_power_on:
+            # confort_temp_max = float( confort_zone['temp_max'] ) + float( confort_zone['delta_temp'] )
+            self._config_areas
+
+            # Ottieni l'ora corrente
+            ora_corrente = datetime.now().time()
+            # Imposta l'intervallo di tempo
+            inizio = ora_corrente.replace(hour=2, minute=0, second=0, microsecond=0)
+            fine = ora_corrente.replace(hour=22, minute=0, second=0, microsecond=0)
+
+#
+# Imposta la modalità di lavoro della PDC (Caldo)
+#
+            if self._sensor_map.get(self._radiant_actuator_id) and \
+                is_number( self._sensor_map.get(self._radiant_actuator_id).state ) and \
+                float(self._sensor_map.get(self._radiant_actuator_id).state) != self._radiant_device_heating_code:
+                
+                await self._async_number_set_value( self._radiant_actuator_id, self._radiant_device_heating_code )             
+                _LOGGER.info( "_async_radiant_mode_auto_season_winter - Set %s to %s", \
+                            str(self._radiant_actuator_id), str(self._radiant_device_heating_code) \
+                    )
+#
+# Manage Radiant
+#
+            _LOGGER.debug( "_async_radiant_mode_auto_season_winter - %s", str(self._sensor_map.get(self._power_supply_adjustable_id)))
+            if home_current_heat_index > confort_setpoint_power_off: # Radiant power off
+                # await self._async_switch_turn( self._power_supply_direct_id, TURN_OFF )
+
+                if self._sensor_map.get(self._power_supply_adjustable_id) and \
+                    self._sensor_map.get(self._power_supply_adjustable_id).state == STATE_ON:
+                    await self._async_switch_turn( self._power_supply_adjustable_id, TURN_OFF )
+                    _LOGGER.info( "_async_radiant_mode_auto_season_winter - Set %s TURN_OFF", \
+                                str(self._power_supply_adjustable_id) )
+
+                if self._sensor_map.get(self._radiant_device_power_id) and \
+                    self._sensor_map.get(self._radiant_device_power_id).state == STATE_ON:
+                    await self._async_switch_turn( self._radiant_device_power_id, TURN_OFF )
+                    _LOGGER.info( "_async_radiant_mode_auto_season_winter - Set %s TURN_OFF", \
+                                str(self._radiant_device_power_id) )
+                                                        
+                for area in self._config_areas:
+                    if "indoor" in area and "radiant" in area and area['indoor'] and area['radiant']:
+                        actuator_entity_id = area['thermal_collector_valve_switch']
+                        actuator_object = self.hass.states.get(actuator_entity_id)
+                        if actuator_object and actuator_object.state == STATE_ON:
+                            await self._async_switch_turn( actuator_entity_id, TURN_OFF )
+                            _LOGGER.info( "_async_radiant_mode_auto_season_winter - Set %s TURN_OFF", \
+                                        str(self.actuator_entity_id) )        
+            else: # Radiant power on
+#     
+# Accende la Pompa di ricircolo e la valvola di regolazione temperatura dell'acqua
+#
+                if self._sensor_map.get(self._radiant_boiler_temp_system_supply) and \
+                    self._sensor_map.get(self._radiant_boiler_temp_system_return) and \
+                    self._sensor_map.get(self._power_supply_adjustable_id) and \
+                    is_number( self._sensor_map.get(self._radiant_boiler_temp_system_supply).state ) and \
+                    is_number( self._sensor_map.get(self._radiant_boiler_temp_system_return).state ) and \
+                    float( self._sensor_map.get(self._radiant_boiler_temp_system_supply).state ) > 27 and \
+                    float( self._sensor_map.get(self._radiant_boiler_temp_system_return).state ) > 25.5 and \
+                    self._sensor_map.get(self._power_supply_adjustable_id).state != STATE_ON:
+                        await self._async_switch_turn( self._power_supply_adjustable_id, TURN_ON )
+                        _LOGGER.info( "_async_radiant_mode_auto_season_winter - Set %s TURN_ON with system supply at %s and system return ad %s", \
+                                    str(self._power_supply_adjustable_id), \
+                                    str(self._sensor_map.get(self._radiant_boiler_temp_system_supply).state), \
+                                    str(self._sensor_map.get(self._radiant_boiler_temp_system_return).state))
+#
+# Manage Thermal Collector
+#
+                adjust_valve_percent = await self._async_radiant_thermal_collector_mode_auto(
+                    confort_setpoint_power_on, 
+                    confort_setpoint_power_off,
+                    )
+#               
+# Set mixing valve value
+#
+                if self._sensor_map.get(self._power_supply_mixing_valve_id) and \
+                    is_number( self._sensor_map.get(self._power_supply_mixing_valve_id).state ) and \
+                    float(self._sensor_map.get(self._power_supply_mixing_valve_id).state) != adjust_valve_percent["adjust_valve_percent"]:
+                    await self._async_number_set_value( self._power_supply_mixing_valve_id, adjust_valve_percent["adjust_valve_percent"] )
+                    _LOGGER.info( "_async_radiant_mode_auto_season_winter - Set %s to %s %", \
+                                 str(self._power_supply_mixing_valve_id), str(adjust_valve_percent["adjust_valve_percent"]) )
+#
+# Auto power off
+#
+            if ora_corrente > fine:
+                await self._async_switch_turn( self._radiant_device_power_id, TURN_OFF )
+                _LOGGER.info( "_async_radiant_mode_auto_season_winter - Set %s TURN_OFF", \
+                            str(self._radiant_device_power_id) )
+#
+# Device PDC is Power OFF
+#
+        else: # if not is_device_power_on
+            # Ottieni l'ora corrente
+            ora_corrente = datetime.now().time()
+            # Imposta l'intervallo di tempo
+            inizio = ora_corrente.replace(hour=2, minute=0, second=0, microsecond=0)
+            fine = ora_corrente.replace(hour=9, minute=0, second=0, microsecond=0)
+
+            # _LOGGER.debug( "_async_radiant_mode_auto_season_winter - Set %s to %s", \
+            #               str(self._power_supply_mixing_valve_id), str(adjust_valve_percent) \
+            # )
+
+            if self._sensor_map.get(self._power_supply_adjustable_id) and \
+                self._sensor_map.get(self._power_supply_adjustable_id).state == STATE_ON and \
+                self._sensor_map.get(self._radiant_boiler_temp_system_return) and \
+                is_number( self._sensor_map.get(self._radiant_boiler_temp_system_return).state ) and \
+                float( self._sensor_map.get(self._radiant_boiler_temp_system_return).state ) < 25.5:
+
+                await self._async_switch_turn( self._power_supply_adjustable_id, TURN_OFF )
+                await self._async_switch_turn( self._radiant_device_power_id, TURN_OFF )
+                for area in self._config_areas:
+                    if "indoor" in area and "radiant" in area and area['indoor'] and area['radiant']:
+                        actuator_entity_id = area['thermal_collector_valve_switch']
+                        actuator_object = self.hass.states.get(actuator_entity_id)
+                        if actuator_object and actuator_object.state == STATE_ON:
+                            await self._async_switch_turn( actuator_entity_id, TURN_OFF )
+
+
+    async def _async_vmc_mode_auto(self, hvac_mode, season_name, confort_zone, sensor_map) -> Any:
         """hvac VMC controller"""
+
+        is_home_windows_closed = self._sensor_map.get( self._vmc_home_windows_state ) and \
+                                    self._sensor_map.get( self._vmc_home_windows_state ).state == 'on'
 
         #
         # HVAC Mode: AUTO & Home Windows: ON (Opened) 
-        #
-        if hvac_mode == HVACMode.AUTO:
-            season_name = ''
+        # 
+        
+        # _LOGGER.info( "_async_vmc_mode_auto %s", self._sensor_map.get( self._vmc_home_windows_state ).state )
+        if is_home_windows_closed:
 
-            season_info = self.get_season_from_weather()
-            confort_zone = self.get_confort_zone()
             season_actuator_id = self._vmc_season_config.get(CONF_ACTUATOR)
             
             home_current_temp_hum = await self.async_ambient_temp_hum( self._config[CONF_AREAS], sensor_map)
             home_current_temperature = home_current_temp_hum.get('temp')
             home_current_humidity = home_current_temp_hum.get('hum')
-            terrace_temperature_id = self._get_area_by_name('Terrace').get(CONF_SENSORS).get(CONF_TEMPERATURE)
-            terrace_temperature = float(sensor_map.get(terrace_temperature_id).state)
-            is_device_power_on = self._sensor_map.get(self._vmc_power_entity_id) and self._sensor_map.get(self._vmc_power_entity_id).state == STATE_ON
+            # terrace_temperature_id = self._get_area_by_name('Terrace').get(CONF_SENSORS).get(CONF_TEMPERATURE)
+            # terrace_temperature = float(sensor_map.get(terrace_temperature_id).state)
+            is_device_power_on = self._sensor_map.get(self._vmc_power_entity_id) \
+                                    and self._sensor_map.get(self._vmc_power_entity_id).state == STATE_ON
 
 
             # _LOGGER.debug( "_async_vmc_mode_auto : season %s | confort zone %s", \
             #     str(season_info), str(confort_zone))
-
-            #
-            # Season evaluation
-            #
-            if season_info and not season_info.get('weather_anomaly'):
-                season_name = season_info.get('label')
-                _LOGGER.debug( "_async_vmc_mode_auto - FALSE weather_anomaly, current season is %s, weather season %s", \
-                                str(season_name), str(season_info.get('label')) )
-
-            elif season_info and season_info.get('weather_anomaly'):
-                season_name = season_info.get('overridden')
-                _LOGGER.debug( "_async_vmc_mode_auto - TRUE weather_anomaly, current season is '%s', weather season '%s'", \
-                                str(season_info.get('label')), str(season_name) )
                 
-            #
-            # Processing VMC
-            #
-            if is_device_power_on:
-                #
-                # VMC temperature Setpoint by season
-                # 
-                set_point_temp = max( home_current_temperature, float(confort_zone['temp_max'] ) )
-                if self._sensor_map.get(self._vmc_t_setpoint_entity_id) and \
-                    float(self._sensor_map.get(self._vmc_t_setpoint_entity_id).state) != set_point_temp:
-                    
-                    await self._async_number_set_value(self._vmc_t_setpoint_entity_id, set_point_temp)
-                    _LOGGER.info( "_async_vmc_mode_auto - Set %s to %s", str(self._vmc_t_setpoint_entity_id), str(set_point_temp) )
-
-                #
-                # VMC humidity Setpoint by season
-                #
-                if self._sensor_map.get(self._vmc_h_setpoint_entity_id) and \
-                    float(self._sensor_map.get(self._vmc_h_setpoint_entity_id).state) != float(confort_zone['hum_max']):
-                    
-                    await self._async_number_set_value(self._vmc_h_setpoint_entity_id, float(confort_zone['hum_max']))
-                    _LOGGER.info( "_async_vmc_mode_auto - Set %s to %s", str(self._vmc_h_setpoint_entity_id), str(confort_zone['hum_max']) )
-
             if season_name == CONF_WINTER:
+                if is_device_power_on:
+                    #
+                    # VMC temperature Setpoint by season
+                    # 
+                    # self._confort_setpoint_power_on 
+                    # self._confort_setpoint_power_off 
+                    confort_temp_min = mean( [float( confort_zone['temp_max'] ), float( confort_zone['temp_min'] )] ) \
+                                    - float( confort_zone['delta_temp'] )
+                    set_point_temp = max( confort_temp_min, home_current_temp_hum.get( 't_avg_h_index' ) )
+
+                    set_point_temp = self._confort_setpoint_power_off
+
+                    if self._sensor_map.get(self._vmc_t_setpoint_entity_id) and \
+                        is_number( self._sensor_map.get(self._vmc_t_setpoint_entity_id).state ) and \
+                        float(self._sensor_map.get(self._vmc_t_setpoint_entity_id).state) != set_point_temp:
+                        
+                        await self._async_number_set_value( self._vmc_t_setpoint_entity_id, set_point_temp )
+                        _LOGGER.info( "_async_vmc_mode_auto - Set %s to %s", str(self._vmc_t_setpoint_entity_id), str(set_point_temp) )
+                    #
+                    # VMC humidity Setpoint by season
+                    #
+                    set_point_hum = float(confort_zone['hum_max']) + float( confort_zone['delta_hum'] )
+                    if self._sensor_map.get(self._vmc_h_setpoint_entity_id) and \
+                        is_number( self._sensor_map.get(self._vmc_h_setpoint_entity_id).state ) and \
+                        float(self._sensor_map.get(self._vmc_h_setpoint_entity_id).state) != set_point_hum:
+                        
+                        await self._async_number_set_value(self._vmc_h_setpoint_entity_id, set_point_hum)
+                        _LOGGER.info( "_async_vmc_mode_auto - Set %s to %s", str(self._vmc_h_setpoint_entity_id), str(set_point_hum) )
+
                 await self._async_vmc_mode_auto_season_winter( \
                     is_device_power_on, season_actuator_id, confort_zone, home_current_temperature )
             elif season_name == CONF_SPRING:
@@ -617,8 +989,6 @@ class DevicesHub(Entity):
             elif season_name == CONF_AUTUMN:
                 await self._async_vmc_mode_auto_season_autumn( \
                     is_device_power_on, season_actuator_id, confort_zone, home_current_temperature )
-
-
 
             #
             # VMC Power: ON
@@ -734,7 +1104,98 @@ class DevicesHub(Entity):
         #             # str(ora_corrente)
         # )
         
-        _LOGGER.debug( "_async_vmc_mode_auto_season_winter - %s", str(ora_corrente) )
+        # _LOGGER.debug( "_async_vmc_mode_auto_season_winter - %s", str(ora_corrente) )
+
+        #
+        # Evaluation of the climate system's status for potential support from the ventilation and mechanical cooling (VMC) system.
+        #
+        if self._sensor_map.get(self._power_supply_adjustable_id) and \
+            self._sensor_map.get(self._power_supply_adjustable_id).state == STATE_ON and \
+            self._sensor_map.get(self._power_supply_mixing_valve_id) and \
+            is_number( self._sensor_map.get(self._power_supply_mixing_valve_id).state ) and \
+            float(self._sensor_map.get(self._power_supply_mixing_valve_id).state) <= 60:                
+
+            vmc_processing_object = self._sensor_map.get( self._vmc_season_config.get( CONF_ACTUATOR ) )
+
+            if not is_device_power_on:
+                #
+                # Device Power ON if state is OFF
+                #
+                await self._async_switch_turn( self._vmc_power_entity_id, TURN_ON )
+                _LOGGER.info( "_async_vmc_mode_auto_season_winter - Turn VMC ON" )
+                return
+            
+            #
+            # Select treatment
+            #
+            vmc_processing_object = self._sensor_map.get( self._vmc_season_config.get( CONF_ACTUATOR ) )
+            if vmc_processing_object and vmc_processing_object.state != 'Off':
+                await self._async_input_select_set_value( season_actuator_id, 'Off' )
+                _LOGGER.info( "_async_vmc_mode_auto_season_winter - Switch processing season to '%s'", 'Off' )            
+
+            #
+            # Force heating
+            #
+            if self._sensor_map.get(self._vmc_force_heating_id) and \
+                self._sensor_map.get(self._vmc_force_heating_id).state == STATE_OFF:           
+                await self._async_switch_turn( self._vmc_force_heating_id, TURN_ON )
+                _LOGGER.info( "_async_vmc_mode_auto_season_winter - Set %s TURN_ON", self._vmc_force_heating_id )
+
+            #
+            # Direct Power Supply ON if state is OFF
+            #
+            if self._sensor_map.get(self._vmc_t_ambient) and is_number( self._sensor_map.get(self._vmc_t_ambient).state ) and \
+                self._sensor_map.get(self._power_supply_direct_id) and \
+                self._sensor_map.get(self._power_supply_direct_id).state == STATE_OFF and \
+                    self._sensor_map.get(self._vmc_t_water) and \
+                    is_number( self._sensor_map.get(self._vmc_t_water).state ):
+
+                current_temp = float(self._sensor_map.get(self._vmc_t_water).state)
+
+                if self._vmc_controller_water_alarm and current_temp <= float(self._sensor_map.get(self._vmc_t_ambient).state):
+                    self._vmc_controller_water_alarm = False
+
+                # Condizione per attivare l'allarme
+                if not self._vmc_controller_water_alarm and self._sensor_map.get(self._vmc_high_water_temp) and \
+                    self._sensor_map.get(self._vmc_high_water_temp).state == STATE_OFF:
+                    await self._async_switch_turn(self._power_supply_direct_id, TURN_ON)
+                    _LOGGER.info( "_async_vmc_mode_auto_season_winter - Set %s TURN_ON", self._power_supply_direct_id )
+            elif self._sensor_map.get(self._power_supply_direct_id) and \
+                    self._sensor_map.get(self._power_supply_direct_id).state == STATE_ON and \
+                    self._sensor_map.get(self._vmc_high_water_temp) and \
+                    self._sensor_map.get(self._vmc_high_water_temp).state == STATE_ON:
+                self._vmc_controller_water_alarm = True 
+                await self._async_switch_turn( self._power_supply_direct_id, TURN_OFF )
+                _LOGGER.info( "_async_vmc_mode_auto_season_winter - Set %s TURN_OFF", self._power_supply_direct_id )
+
+            # if self._sensor_map.get(self._power_supply_direct_id) and \
+            #     self._sensor_map.get(self._power_supply_direct_id).state == STATE_OFF and \
+            #         self._sensor_map.get(self._vmc_t_water) and \
+            #         is_number( self._sensor_map.get(self._vmc_t_water).state ) and \
+            #         float(self._sensor_map.get(self._vmc_t_water).state) <= (36) and \
+            #             self._sensor_map.get(self._vmc_high_water_temp) and \
+            #             self._sensor_map.get(self._vmc_high_water_temp).state == STATE_OFF:           
+            #     await self._async_switch_turn( self._power_supply_direct_id, TURN_ON )
+            #     _LOGGER.info( "_async_vmc_mode_auto_season_winter - Set %s TURN_ON", self._power_supply_direct_id )
+
+            return
+        
+        elif is_device_power_on:
+            #
+            # Turn OFF Force heating
+            #
+            if self._sensor_map.get(self._vmc_force_heating_id) and \
+                self._sensor_map.get(self._vmc_force_heating_id).state == STATE_ON:           
+                await self._async_switch_turn( self._vmc_force_heating_id, TURN_OFF )
+                _LOGGER.info( "_async_vmc_mode_auto_season_winter - Set %s TURN_OFF", self._vmc_force_heating_id )
+
+            #
+            # Turn OFF Direct Power Supply
+            #
+            if self._sensor_map.get(self._power_supply_direct_id) and \
+                self._sensor_map.get(self._power_supply_direct_id).state == STATE_ON:           
+                await self._async_switch_turn( self._power_supply_direct_id, TURN_OFF )
+                _LOGGER.info( "_async_vmc_mode_auto_season_winter - Set %s TURN_OFF", self._power_supply_direct_id )
 
         # Verifica se l'ora corrente è tra le 2:00 e le 9:00
         if inizio <= ora_corrente < fine:
@@ -749,7 +1210,12 @@ class DevicesHub(Entity):
             if vmc_processing_object and vmc_processing_object.state != 'Off':
                 await self._async_input_select_set_value( season_actuator_id, 'Off' )
                 _LOGGER.info( "_async_vmc_mode_auto_season_winter - Switch processing season to '%s'", 'Off' )
-            
+
+            vmc_spare_setpoint_id_object = self._sensor_map.get( self._vmc_spare_setpoint_id )
+            if vmc_spare_setpoint_id_object and int(vmc_spare_setpoint_id_object.state) != 1:
+                await self._async_number_set_value( self._vmc_spare_setpoint_id, 1 )
+                _LOGGER.info( "_async_vmc_mode_auto_season_winter - Set Spare Setpoint ON" )
+
             vent_recirculation_object = self._sensor_map.get( self._vmc_vent_recirculation_id )
             if vent_recirculation_object and vent_recirculation_object.state == 'off':
                 await self._async_switch_turn( self._vmc_vent_recirculation_id, TURN_ON )
@@ -773,6 +1239,11 @@ class DevicesHub(Entity):
                     await self._async_input_select_set_value( season_actuator_id, self._vmc_season_config.get(CONF_WINTER) )
                     _LOGGER.info( "_async_vmc_mode_auto_season_winter - Switch processing season to '%s'", self._vmc_season_config.get( CONF_ACTUATOR ) )
                 
+                vmc_spare_setpoint_id_object = self._sensor_map.get( self._vmc_spare_setpoint_id )
+                if vmc_spare_setpoint_id_object and int(vmc_spare_setpoint_id_object.state) != 5:
+                    await self._async_number_set_value( self._vmc_spare_setpoint_id, 5 )
+                    _LOGGER.info( "_async_vmc_mode_auto_season_winter - Set Spare Setpoint ON" )
+
                 vent_recirculation_object = self._sensor_map.get( self._vmc_vent_recirculation_id )
                 if vent_recirculation_object and vent_recirculation_object.state == 'on':
                     await self._async_switch_turn( self._vmc_vent_recirculation_id, TURN_OFF )

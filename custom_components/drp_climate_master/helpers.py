@@ -1,8 +1,13 @@
 import logging
 from datetime import timedelta, datetime
+import sqlite3
+from threading import Lock
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import async_get_platforms
+
+db_path = "/config/home-assistant_v2.db"
+db_lock = Lock()
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -17,7 +22,7 @@ def get_platform(hass, name):
 
 async def async_platform_add_entities(hass: HomeAssistant, platform: str, entities: list, discovery_info=True):
     if discovery_info is None:
-        _LOGGER.warn( 'discovery_info is None' )
+        _LOGGER.warning( 'discovery_info is None' )
         return
 
     entity_platform = get_platform(hass, platform)
@@ -25,7 +30,7 @@ async def async_platform_add_entities(hass: HomeAssistant, platform: str, entiti
     if entity_platform:
         await entity_platform.async_add_entities(entities, discovery_info)
     else:
-        _LOGGER.warn( 'Platform %s not found.', platform )
+        _LOGGER.warning( 'Platform %s not found.', platform )
 
 def is_number(string):
     """ Returns True is string is a number. """
@@ -65,3 +70,28 @@ def weighted_average(valori, pesi):
 
   media_ponderata = somma_prodotti / somma_pesi
   return media_ponderata
+
+
+def enquiry_entity_in_state_last_minutes(entity_id, state, minutes):
+    with db_lock:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        query = """
+          WITH entities AS (
+            SELECT metadata_id
+              FROM states_meta sm
+              WHERE entity_id = ?
+          )
+          SELECT count(*) as states
+          FROM states a
+          JOIN entities b ON a.metadata_id = b.metadata_id
+          WHERE a.state = ?
+          AND DATETIME(a.last_reported_ts, 'unixepoch') > DATETIME('now', ?)
+        """
+        cursor.execute( query, (entity_id, state, "-" + minutes + " minutes") )
+        result = cursor.fetchone()
+        conn.close()
+        # _LOGGER.info( 'enquiry_entity_in_state_last_minutes %s is %s last %s minutes.', entity_id, state, minutes )
+        return result[0]
+
+

@@ -6,6 +6,10 @@ from typing import cast
 
 import voluptuous as vol
 
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.components.climate import (
+    DATA_COMPONENT,
+)
 from homeassistant.core import HomeAssistant
 import homeassistant.helpers.config_validation as cv
 
@@ -44,6 +48,8 @@ from .const import (
     CONF_OUTDOOR_TEMPERATURE,
     CONF_SET_POINTS,
     CONF_VMC,
+    CONF_SUPPLY_UNITS,
+    CONF_RADIANT,
     CONF_WEATHER,
     DEFAULT_HUB,
     DEFAULT_TEMP_UNIT,
@@ -54,7 +60,10 @@ from .const import (
     CONF_H_SETPOINT,
     CONF_DEW_POINT_SETPOINT,
     CONF_DELTA_DEW_POINT_SETPOINT,
+    CONF_SPARE_SETPOINT,
     CONF_VENT_RECIRCULATION,
+    CONF_FORCE_HEATING,
+    CONF_FORCE_COOLING,
 
     CONF_SEASON,
     CONF_ACTUATOR,
@@ -62,6 +71,23 @@ from .const import (
     CONF_SUMMER,
     CONF_AUTUMN,
     CONF_SPRING,
+
+    CONF_DIRECT_SUPPLY_UNIT,
+    CONF_ADJUSTABLE_SUPPLY_UNIT,
+    CONF_THREE_POINT_MIXING_VALVE,
+
+    CONF_ADJUSTABLE_TEMP_SYSTEM_SUPPLY,
+    CONF_ADJUSTABLE_TEMP_SYSTEM_RETURN,
+    CONF_DIRECT_TEMP_SYSTEM_SUPPLY,
+    CONF_DIRECT_TEMP_SYSTEM_RETURN,
+
+    CONF_PDC_TEMP_WATER_IN,
+    CONF_PDC_TEMP_WATER_OUT,
+    CONF_BOILER_TEMP_SYSTEM_SUPPLY,
+    CONF_BOILER_TEMP_SYSTEM_RETURN,
+
+    CONF_FM_POWER,
+    CONF_MODE,
 
     CONF_COMPRESSOR_MANAGEMENT,
     CONF_DEHUMIDIFICATION_OR_COOLING,
@@ -113,6 +139,45 @@ AREAS_SCHEMA = vol.Schema(
     }
 )
 
+SUPPLY_UNITS_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_DIRECT_SUPPLY_UNIT): cv.entity_id,
+        vol.Required(CONF_ADJUSTABLE_SUPPLY_UNIT): cv.entity_id,
+        vol.Required(CONF_THREE_POINT_MIXING_VALVE): cv.entity_id,
+        vol.Required(CONF_SENSORS): vol.Schema(
+            {
+                vol.Required(CONF_ADJUSTABLE_TEMP_SYSTEM_SUPPLY): cv.entity_id,
+                vol.Required(CONF_ADJUSTABLE_TEMP_SYSTEM_RETURN): cv.entity_id, 
+                vol.Required(CONF_DIRECT_TEMP_SYSTEM_SUPPLY): cv.entity_id,
+                vol.Required(CONF_DIRECT_TEMP_SYSTEM_RETURN): cv.entity_id,   
+            }
+        ),
+    }
+)
+
+RADIANT_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_FM_POWER): cv.entity_id,
+        vol.Required(CONF_POWER): cv.entity_id,
+        vol.Required(CONF_POWER): cv.entity_id,
+        vol.Required(CONF_MODE): vol.Schema(
+            {
+                vol.Required(CONF_ACTUATOR): cv.entity_id,
+                vol.Required(CONF_HEATING): cv.positive_int,
+                vol.Required(CONF_COOLING): cv.positive_int,
+            }
+        ),
+        vol.Required(CONF_SENSORS): vol.Schema(
+            {
+                vol.Required(CONF_PDC_TEMP_WATER_IN): cv.entity_id,
+                vol.Required(CONF_PDC_TEMP_WATER_OUT): cv.entity_id, 
+                vol.Required(CONF_BOILER_TEMP_SYSTEM_SUPPLY): cv.entity_id,
+                vol.Required(CONF_BOILER_TEMP_SYSTEM_RETURN): cv.entity_id,   
+            }
+        ),
+    }
+)
+
 VMC_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_POWER): cv.entity_id,
@@ -120,7 +185,10 @@ VMC_SCHEMA = vol.Schema(
         vol.Required(CONF_H_SETPOINT): cv.entity_id,
         vol.Required(CONF_DEW_POINT_SETPOINT): cv.entity_id,
         vol.Required(CONF_DELTA_DEW_POINT_SETPOINT): cv.entity_id,
+        vol.Required(CONF_SPARE_SETPOINT): cv.entity_id,
         vol.Required(CONF_VENT_RECIRCULATION): cv.entity_id,
+        vol.Required(CONF_FORCE_HEATING): cv.entity_id,
+        vol.Required(CONF_FORCE_COOLING): cv.entity_id,
 
         vol.Required(CONF_SEASON): vol.Schema(
             {
@@ -184,7 +252,9 @@ VMC_SCHEMA = vol.Schema(
 
 DEVICES_SCHEMA = vol.Schema(
     {
-        vol.Optional(CONF_VMC): vol.All(VMC_SCHEMA)
+        vol.Optional(CONF_SUPPLY_UNITS): vol.All(SUPPLY_UNITS_SCHEMA),
+        vol.Optional(CONF_RADIANT): vol.All(RADIANT_SCHEMA),
+        vol.Optional(CONF_VMC): vol.All(VMC_SCHEMA),
     }
 )
 
@@ -268,3 +338,12 @@ async def async_reset_platform(hass: HomeAssistant, integration_name: str) -> No
     hubs = hass.data[DOMAIN]
     for name in hubs:
         await hubs[name].async_close()
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up a config entry."""
+    return await hass.data[DATA_COMPONENT].async_setup_entry(entry)
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload a config entry."""
+    return await hass.data[DATA_COMPONENT].async_unload_entry(entry)
